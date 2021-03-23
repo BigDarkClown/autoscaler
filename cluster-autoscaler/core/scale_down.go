@@ -171,13 +171,13 @@ type scaleDownResourcesDelta map[string]int64
 // used as a value in scaleDownResourcesLimits if actual limit could not be obtained due to errors talking to cloud provider
 const scaleDownLimitUnknown = math.MinInt64
 
-func computeScaleDownResourcesLeftLimits(nodes []*apiv1.Node, resourceLimiter *cloudprovider.ResourceLimiter, cp cloudprovider.CloudProvider, timestamp time.Time) scaleDownResourcesLimits {
+func (sd *ScaleDown) computeScaleDownResourcesLeftLimits(nodes []*apiv1.Node, resourceLimiter *cloudprovider.ResourceLimiter, cp cloudprovider.CloudProvider, timestamp time.Time) scaleDownResourcesLimits {
 	totalCores, totalMem := calculateScaleDownCoresMemoryTotal(nodes, timestamp)
 
 	var totalGpus map[string]int64
 	var totalGpusErr error
 	if cloudprovider.ContainsGpuResources(resourceLimiter.GetResources()) {
-		totalGpus, totalGpusErr = calculateScaleDownGpusTotal(nodes, cp, timestamp)
+		totalGpus, totalGpusErr = sd.calculateScaleDownGpusTotal(nodes, cp, timestamp)
 	}
 
 	resultScaleDownLimits := make(scaleDownResourcesLimits)
@@ -229,7 +229,7 @@ func calculateScaleDownCoresMemoryTotal(nodes []*apiv1.Node, timestamp time.Time
 	return coresTotal, memoryTotal
 }
 
-func calculateScaleDownGpusTotal(nodes []*apiv1.Node, cp cloudprovider.CloudProvider, timestamp time.Time) (map[string]int64, error) {
+func (sd *ScaleDown) calculateScaleDownGpusTotal(nodes []*apiv1.Node, cp cloudprovider.CloudProvider, timestamp time.Time) (map[string]int64, error) {
 	type gpuInfo struct {
 		name  string
 		count int64
@@ -266,7 +266,8 @@ func calculateScaleDownGpusTotal(nodes []*apiv1.Node, cp cloudprovider.CloudProv
 			}
 		}
 		if !cacheHit {
-			gpuType, gpuCount, err = gpu.GetNodeTargetGpus(cp.GPULabel(), node, nodeGroup)
+			gpuType, gpuCount, err = sd.processors.CustomResourceProcessor.GetNodeTargetResource(sd.context,
+				gpu.ResourceNvidiaGPU, cp.GPULabel(), node, nodeGroup)
 			if err != nil {
 				return nil, errors.ToAutoscalerError(errors.CloudProviderError, err).AddPrefix("can not get gpu count for node %v when calculating cluster gpu usage")
 			}
@@ -300,7 +301,7 @@ func copyScaleDownResourcesLimits(source scaleDownResourcesLimits) scaleDownReso
 	return copy
 }
 
-func computeScaleDownResourcesDelta(cp cloudprovider.CloudProvider, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup, resourcesWithLimits []string) (scaleDownResourcesDelta, errors.AutoscalerError) {
+func (sd *ScaleDown) computeScaleDownResourcesDelta(cp cloudprovider.CloudProvider, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup, resourcesWithLimits []string) (scaleDownResourcesDelta, errors.AutoscalerError) {
 	resultScaleDownDelta := make(scaleDownResourcesDelta)
 
 	nodeCPU, nodeMemory := core_utils.GetNodeCoresAndMemory(node)
@@ -308,7 +309,8 @@ func computeScaleDownResourcesDelta(cp cloudprovider.CloudProvider, node *apiv1.
 	resultScaleDownDelta[cloudprovider.ResourceNameMemory] = nodeMemory
 
 	if cloudprovider.ContainsGpuResources(resourcesWithLimits) {
-		gpuType, gpuCount, err := gpu.GetNodeTargetGpus(cp.GPULabel(), node, nodeGroup)
+		gpuType, gpuCount, err := sd.processors.CustomResourceProcessor.GetNodeTargetResource(sd.context,
+			gpu.ResourceNvidiaGPU, cp.GPULabel(), node, nodeGroup)
 		if err != nil {
 			return scaleDownResourcesDelta{}, errors.ToAutoscalerError(errors.CloudProviderError, err).AddPrefix("Failed to get node %v gpu: %v", node.Name)
 		}
@@ -825,7 +827,7 @@ func (sd *ScaleDown) TryToScaleDown(
 		return scaleDownStatus, errors.ToAutoscalerError(errors.CloudProviderError, errCP)
 	}
 
-	scaleDownResourcesLeft := computeScaleDownResourcesLeftLimits(nodesWithoutMaster, resourceLimiter, sd.context.CloudProvider, currentTime)
+	scaleDownResourcesLeft := sd.computeScaleDownResourcesLeftLimits(nodesWithoutMaster, resourceLimiter, sd.context.CloudProvider, currentTime)
 
 	nodeGroupSize := utils.GetNodeGroupSizeMap(sd.context.CloudProvider)
 	resourcesWithLimits := resourceLimiter.GetResources()
@@ -900,7 +902,7 @@ func (sd *ScaleDown) TryToScaleDown(
 			continue
 		}
 
-		scaleDownResourcesDelta, err := computeScaleDownResourcesDelta(sd.context.CloudProvider, node, nodeGroup, resourcesWithLimits)
+		scaleDownResourcesDelta, err := sd.computeScaleDownResourcesDelta(sd.context.CloudProvider, node, nodeGroup, resourcesWithLimits)
 		if err != nil {
 			klog.Errorf("Error getting node resources: %v", err)
 			sd.addUnremovableNodeReason(node, simulator.UnexpectedError)
@@ -1011,10 +1013,12 @@ func (sd *ScaleDown) TryToScaleDown(
 			klog.Errorf("Failed to delete %s: %v", toRemove.Node.Name, result.Err)
 			return
 		}
+		gpuType := sd.processors.CustomResourceProcessor.GetResourceTypeForMetrics(sd.context,
+			gpu.ResourceNvidiaGPU, gpuLabel, availableGPUTypes, toRemove.Node, nodeGroup)
 		if readinessMap[toRemove.Node.Name] {
-			metrics.RegisterScaleDown(1, gpu.GetGpuTypeForMetrics(gpuLabel, availableGPUTypes, toRemove.Node, nodeGroup), metrics.Underutilized)
+			metrics.RegisterScaleDown(1, gpuType, metrics.Underutilized)
 		} else {
-			metrics.RegisterScaleDown(1, gpu.GetGpuTypeForMetrics(gpuLabel, availableGPUTypes, toRemove.Node, nodeGroup), metrics.Unready)
+			metrics.RegisterScaleDown(1, gpuType, metrics.Unready)
 		}
 	}()
 
@@ -1079,7 +1083,7 @@ func (sd *ScaleDown) getEmptyNodes(candidates []string, maxEmptyBulkDelete int,
 			availabilityMap[nodeGroup.Id()] = available
 		}
 		if available > 0 {
-			resourcesDelta, err := computeScaleDownResourcesDelta(sd.context.CloudProvider, node, nodeGroup, resourcesNames)
+			resourcesDelta, err := sd.computeScaleDownResourcesDelta(sd.context.CloudProvider, node, nodeGroup, resourcesNames)
 			if err != nil {
 				klog.Errorf("Error: %v", err)
 				continue
@@ -1153,10 +1157,13 @@ func (sd *ScaleDown) scheduleDeleteEmptyNodes(emptyNodes []*apiv1.Node, client k
 				result = status.NodeDeleteResult{ResultType: status.NodeDeleteErrorFailedToDelete, Err: deleteErr}
 				return
 			}
+			gpuType := sd.processors.CustomResourceProcessor.GetResourceTypeForMetrics(sd.context,
+				gpu.ResourceNvidiaGPU, sd.context.CloudProvider.GPULabel(),
+				sd.context.CloudProvider.GetAvailableGPUTypes(), nodeToDelete, nodeGroupForDeletedNode)
 			if readinessMap[nodeToDelete.Name] {
-				metrics.RegisterScaleDown(1, gpu.GetGpuTypeForMetrics(sd.context.CloudProvider.GPULabel(), sd.context.CloudProvider.GetAvailableGPUTypes(), nodeToDelete, nodeGroupForDeletedNode), metrics.Empty)
+				metrics.RegisterScaleDown(1, gpuType, metrics.Empty)
 			} else {
-				metrics.RegisterScaleDown(1, gpu.GetGpuTypeForMetrics(sd.context.CloudProvider.GPULabel(), sd.context.CloudProvider.GetAvailableGPUTypes(), nodeToDelete, nodeGroupForDeletedNode), metrics.Unready)
+				metrics.RegisterScaleDown(1, gpuType, metrics.Unready)
 			}
 			result = status.NodeDeleteResult{ResultType: status.NodeDeleteOk}
 		}(node, nodeGroup, sd.context.DaemonSetEvictionForEmptyNodes)

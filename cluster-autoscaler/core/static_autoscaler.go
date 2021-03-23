@@ -719,7 +719,8 @@ func (a *StaticAutoscaler) obtainNodeLists(cp cloudprovider.CloudProvider) ([]*a
 	// Treat those nodes as unready until GPU actually becomes available and let
 	// our normal handling for booting up nodes deal with this.
 	// TODO: Remove this call when we handle dynamically provisioned resources.
-	allNodes, readyNodes = gpu.FilterOutNodesWithUnreadyGpus(cp.GPULabel(), allNodes, readyNodes)
+	allNodes, readyNodes = a.processors.CustomResourceProcessor.FilterOutNodesWithUnreadyResource(a.AutoscalingContext,
+		gpu.ResourceNvidiaGPU, cp.GPULabel(), allNodes, readyNodes)
 	allNodes, readyNodes = taints.FilterOutNodesWithIgnoredTaints(a.ignoredTaints, allNodes, readyNodes)
 	return allNodes, readyNodes, nil
 }

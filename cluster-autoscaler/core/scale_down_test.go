@@ -1738,18 +1738,6 @@ func TestScaleDownNoMove(t *testing.T) {
 	assert.Equal(t, status.ScaleDownNoUnneeded, scaleDownStatus.Result)
 }
 
-func getCountOfChan(c chan string) int {
-	count := 0
-	for {
-		select {
-		case <-c:
-			count++
-		default:
-			return count
-		}
-	}
-}
-
 func TestCalculateCoresAndMemoryTotal(t *testing.T) {
 	nodeConfigs := []nodeConfig{
 		{"n1", 2000, 7500 * utils.MiB, 0, true, "ng1"},

@@ -20,10 +20,10 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/autoscaler/cluster-autoscaler/processors/customresources"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	_ "k8s.io/component-base/metrics/prometheus/restclient" // for client-go metrics registration
 
 	k8smetrics "k8s.io/component-base/metrics"
@@ -375,7 +375,7 @@ func RegisterError(err errors.AutoscalerError) {
 // RegisterScaleUp records number of nodes added by scale up
 func RegisterScaleUp(nodesCount int, gpuType string) {
 	scaleUpCount.Add(float64(nodesCount))
-	if gpuType != gpu.MetricsNoGPU {
+	if gpuType != customresources.MetricsNoResource {
 		gpuScaleUpCount.WithLabelValues(gpuType).Add(float64(nodesCount))
 	}
 }
@@ -388,7 +388,7 @@ func RegisterFailedScaleUp(reason FailedScaleUpReason) {
 // RegisterScaleDown records number of nodes removed by scale down
 func RegisterScaleDown(nodesCount int, gpuType string, reason NodeScaleDownReason) {
 	scaleDownCount.WithLabelValues(string(reason)).Add(float64(nodesCount))
-	if gpuType != gpu.MetricsNoGPU {
+	if gpuType != customresources.MetricsNoResource {
 		gpuScaleDownCount.WithLabelValues(string(reason), gpuType).Add(float64(nodesCount))
 	}
 }
