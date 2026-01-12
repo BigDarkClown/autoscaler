@@ -94,7 +94,8 @@ func (p *MixedTemplateNodeInfoProvider) Process(autoscalingCtx *ca_context.Autos
 	processNode := func(node *apiv1.Node) (bool, string, caerror.AutoscalerError) {
 		nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(node)
 		if err != nil {
-			return false, "", caerror.ToAutoscalerError(caerror.CloudProviderError, err)
+			klog.Warningf("Failed to find node group for %s: %v", node.Name, err)
+			return false, "", nil
 		}
 		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
 			return false, "", nil
@@ -169,12 +170,12 @@ func (p *MixedTemplateNodeInfoProvider) Process(autoscalingCtx *ca_context.Autos
 		if typedErr != nil {
 			return map[string]*framework.NodeInfo{}, typedErr
 		}
-		nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(node)
-		if err != nil {
-			return map[string]*framework.NodeInfo{}, caerror.ToAutoscalerError(
-				caerror.CloudProviderError, err)
-		}
 		if added {
+			nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(node)
+			if nodeGroup == nil || err != nil {
+				klog.Warningf("Failed to find node group for %s: %v", node.Name, err)
+				continue
+			}
 			klog.Warningf("Built template for %s based on unready/unschedulable node %s", nodeGroup.Id(), node.Name)
 		}
 	}
